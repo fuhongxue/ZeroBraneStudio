@@ -1,50 +1,45 @@
-editor.caretline = true
-editor.showfncall = true
-editor.autotabs = false
-editor.usetabs  = false
-editor.tabwidth = 2
-editor.usewrap = true
-editor.calltipdelay = 500
-editor.smartindent = true
-editor.fold = true
-
-local G = ... -- this now points to the global environment
-if G.ide.osname == 'Macintosh' then
+local mac = ide.osname == 'Macintosh'
+local win = ide.osname == "Windows"
+if mac then
   local defaultsize = 11
   filetree.fontsize = defaultsize
-  funclist.fontsize = defaultsize
-  if G.ide.wxver >= "2.9.5" then
-    editor.fontsize = defaultsize
-    editor.fontname = "Monaco"
-    outputshell.fontsize = editor.fontsize
-    outputshell.fontname = editor.fontname
+  if ide.wxver >= "2.9.5" then
+    editor.fontsize = defaultsize+1
+    output.fontsize = defaultsize
+    console.fontsize = defaultsize
   end
+
+  editor.fontname = "Monaco"
+  output.fontname = editor.fontname
+  console.fontname = editor.fontname
 else
-  -- set Courier New in all other cases (Linux and Windows), otherwise
-  -- a proportional font gets used by default, which doesn't look right.
-  editor.fontname = "Courier New"
-  outputshell.fontname = editor.fontname
+  local defaultsize = 10
+  editor.fontsize = defaultsize+1
+  output.fontsize = defaultsize
+  console.fontsize = defaultsize
+
+  local sysid, major, minor = wx.wxGetOsVersion()
+  editor.fontname =
+    win and (major == 5 and "Courier New" or "Consolas") or "Monospace"
+  output.fontname = editor.fontname
+  console.fontname = editor.fontname
 end
 
-filehistorylength = 20
+filetree.iconfontname = editor.fontname
 
-singleinstance = true
-singleinstanceport = 0xe493
+singleinstance = not mac
 
-acandtip.shorttip = true
-acandtip.nodynwords = true
-
-activateoutput = true
-projectautoopen = true
-autorecoverinactivity = 10
-allowinteractivescript = true -- allow interaction in the output window
-
-interpreter = "luadeb"
 unhidewindow = { -- allow unhiding of GUI windows
   -- 1 - show if hidden, 0 - ignore, 2 -- hide if shown
   ConsoleWindowClass = 2,
+  -- IUP library window
+  ['GDI+ Hook Window Class'] = 2,
+  -- ignore the following windows when "showing all"
   IME = 0,
+  wxDisplayHiddenWindow = 0,
+  -- window added when Microsoft.Windows.Common-Controls is enabled in the manifest
+  tooltips_class32 = 0,
   ['MSCTFIME UI'] = 0,
-  -- GLUT/opengl/SDL applications (for example, moai)
+  -- GLUT/opengl/SDL applications (for example, moai or love2d)
   GLUT = 1, FREEGLUT = 1, SDL_app = 1,
 }

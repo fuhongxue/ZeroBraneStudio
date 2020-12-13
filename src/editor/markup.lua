@@ -1,6 +1,8 @@
--- Copyright (C) Paul Kulchenko 2011-2012
+-- Copyright 2011-16 Paul Kulchenko, ZeroBrane LLC
 -- styles for comment markup
+---------------------------------------------------------
 
+local ide = ide
 local MD_MARK_ITAL = '_' -- italic
 local MD_MARK_BOLD = '**' -- bold
 local MD_MARK_LINK = '[' -- link description start
@@ -12,26 +14,33 @@ local MD_MARK_CODE = '`' -- code
 local MD_MARK_BOXD = '|' -- highlight
 local MD_MARK_MARK = ' ' -- separator
 local MD_LINK_NEWWINDOW = '+' -- indicator to open a new window for links
+-- old versions of Scintilla had only 5-bit styles, so assign styles manually in those cases
 local markup = {
-  [MD_MARK_BOXD] = {st=25, fg={127,0,127}, b=true},
-  [MD_MARK_CODE] = {st=26, fg={127,127,127}, fs=9},
-  [MD_MARK_HEAD] = {st=27, fn="Lucida Console", b=true},
-  [MD_MARK_LINK] = {st=28, u=true, hs={32,32,127}},
-  [MD_MARK_BOLD] = {st=29, b=true},
-  [MD_MARK_ITAL] = {st=30, i=true},
-  [MD_MARK_MARK] = {st=31, v=false},
+  [MD_MARK_BOXD] = {st=ide:AddStyle("markup.boxd", ide.STYLEMASK == 31 and 25 or nil), fg={127,0,127}, b=true},
+  [MD_MARK_CODE] = {st=ide:AddStyle("markup.code", ide.STYLEMASK == 31 and 26 or nil), fg={127,127,127}, fs=10},
+  [MD_MARK_HEAD] = {st=ide:AddStyle("markup.head", ide.STYLEMASK == 31 and 27 or nil), fn="Lucida Console", b=true},
+  [MD_MARK_LINK] = {st=ide:AddStyle("markup.link", ide.STYLEMASK == 31 and 28 or nil), u=true, hs={32,32,127}},
+  [MD_MARK_BOLD] = {st=ide:AddStyle("markup.bold", ide.STYLEMASK == 31 and 29 or nil), b=true},
+  [MD_MARK_ITAL] = {st=ide:AddStyle("markup.ital", ide.STYLEMASK == 31 and 30 or nil), i=true},
+  [MD_MARK_MARK] = {st=ide:AddStyle("markup.mark", ide.STYLEMASK == 31 and 31 or nil), v=false},
 }
 
 -- allow other editor features to recognize this special markup
-function MarkupIsSpecial(style) return style == 31 end
-function MarkupIsAny(style) return style >= 25 and style <= 31 end
+function MarkupIsSpecial(style) return style == markup[MD_MARK_MARK].st end
+function MarkupIsAny(style)
+  for _, mark in pairs(markup) do
+    if style == mark.st then return true end
+  end
+  return false
+end
 function MarkupAddStyles(styles)
   local comment = styles.comment or {}
   for key,value in pairs(markup) do
     local style = styles[key] or {}
     -- copy all style features by value
     for feature in pairs(value) do
-      style[feature] = style[feature] or value[feature] end
+      style[feature] = style[feature] or value[feature]
+    end
     style.fg = style.fg or comment.fg
     style.bg = style.bg or comment.bg
     styles[key] = style
@@ -48,20 +57,20 @@ MarkupAddStyles(ide.config.styles)
 
 function MarkupHotspotClick(pos, editor)
   -- check if this is "our" hotspot event
-  if bit.band(editor:GetStyleAt(pos),31) ~= markup[MD_MARK_LINK].st then
+  if bit.band(editor:GetStyleAt(pos),ide.STYLEMASK) ~= markup[MD_MARK_LINK].st then
     -- not "our" style, so nothing to do for us here
     return
   end
   local line = editor:LineFromPosition(pos)
-  local tx = editor:GetLine(line)
+  local tx = editor:GetLineDyn(line)
   pos = pos + #MD_MARK_LINK - editor:PositionFromLine(line) -- turn into relative position
 
   -- extract the URL/command on the right side of the separator
   local _,_,text = string.find(tx, q(MD_MARK_LINZ).."(%b"..MD_MARK_LINA..MD_MARK_LINT..")", pos)
   if text then
     text = text:gsub("^"..q(MD_MARK_LINA), ""):gsub(q(MD_MARK_LINT).."$", "")
-    local filepath = ide.openDocuments[editor:GetId()].filePath
-      or FileTreeGetDir()
+    local doc = ide:GetDocument(editor)
+    local filepath = doc and doc.filePath or ide:GetProject()
     local _,_,http = string.find(text, [[^(https?:%S+)$]])
     local _,_,command,code = string.find(text, [[^macro:(%w+)%((.*%S)%)$]])
     if not command then _,_,command = string.find(text, [[^macro:(%w+)$]]) end
@@ -78,7 +87,7 @@ function MarkupHotspotClick(pos, editor)
       wx.wxLaunchDefaultBrowser(http, 0)
     elseif filepath then -- only check for saved files
       -- check if requested to open in a new window
-      local newwindow = string.find(text, MD_LINK_NEWWINDOW, 1, true) -- plain search
+      local newwindow = not doc or string.find(text, MD_LINK_NEWWINDOW, 1, true)
       if newwindow then text = string.gsub(text, "^%" .. MD_LINK_NEWWINDOW, "") end
       local filename = GetFullPathIfExists(
         wx.wxFileName(filepath):GetPath(wx.wxPATH_GET_VOLUME), text)
@@ -94,6 +103,7 @@ end
 
 local function ismarkup (tx)
   local start = 1
+  local marksep = "[%s!%?%.,;:%(%)]"
   while true do
     -- find a separator first
     local st,_,sep,more = string.find(tx, "(["..MD_MARK_PTRN.."])(.)", start)
@@ -104,8 +114,7 @@ local function ismarkup (tx)
 
     local s,e,cap
     local qsep = q(sep)
-    local nonsep = ("[^%s]"):format(qsep)
-    local nonspace = ("[^%s]"):format(qsep.."%s")
+    local nonspace = "[^%s]"
     if sep == MD_MARK_HEAD then
       -- always search from the start of the line
       -- [%w%p] set is needed to avoid continuing this markup to the next line
@@ -115,15 +124,18 @@ local function ismarkup (tx)
       s,e,cap = string.find(tx,
         "^(%b"..MD_MARK_LINK..MD_MARK_LINZ
         .."%b"..MD_MARK_LINA..MD_MARK_LINT..")", st)
+      -- if either part of the link is empty `[]` or `()`, skip the match
+      if cap and cap:find("^"..q(MD_MARK_LINK..MD_MARK_LINZ))
+      or cap and cap:find(q(MD_MARK_LINA..MD_MARK_LINT).."$") then s = nil end
     elseif markup[sep] then
-      -- try 2+ characters between separators first
-      -- if not found, try a single character
-      s,e,cap = string.find(tx,"^("..qsep..nonspace..nonsep.."-"..nonspace..qsep..")", st)
-      if not s then s,e,cap = string.find(tx,"^("..qsep..nonspace..qsep..")", st) end
+      -- try a single character first, then 2+ characters between separators;
+      -- this is to handle "`5` `6`" as two sequences, not one.
+      s,e,cap = string.find(tx,"^("..qsep..nonspace..qsep..")".."%f"..marksep, st)
+      if not s then s,e,cap = string.find(tx,"^("..qsep..nonspace..".-"..nonspace..qsep..")".."%f"..marksep, st) end
     end
-    if s and -- selected markup is surrounded by spaces or punctuation
-      (s == start or tx:sub(s-1, s-1):match("[%s%p]")) and
-      (e-s == #tx-1 or tx:sub(e+1, e+1):match("[%s%p]"))
+    if s and -- selected markup is surrounded by spaces or punctuation marks
+      (s == 1   or tx:sub(s-1, s-1):match(marksep)) and
+      (e == #tx or tx:sub(e+1, e+1):match(marksep))
       then return s,e,cap,sep end
     start = st+1
   end
@@ -152,7 +164,7 @@ function MarkupStyle(editor, lines, linee)
   local needfix = false
 
   for line=lines,linee do
-    local tx = editor:GetLine(line)
+    local tx = editor:GetLineDyn(line)
     local ls = editor:PositionFromLine(line)
 
     local from = 1
@@ -168,7 +180,7 @@ function MarkupStyle(editor, lines, linee)
 
       if (f) then
         local p = ls+f+off
-        local s = bit.band(editor:GetStyleAt(p), 31)
+        local s = bit.band(editor:GetStyleAt(p), ide.STYLEMASK)
         -- only style comments and only those that are not at the beginning
         -- of the file to avoid styling shebang (#!) lines
         -- also ignore matches for line comments (as defined in the spec)
@@ -183,7 +195,15 @@ function MarkupStyle(editor, lines, linee)
             local lsep = w:find(q(MD_MARK_LINZ)..q(MD_MARK_LINA))
             if lsep then emark = #w-lsep+#MD_MARK_LINT end
           end
-          editor:StartStyling(p, 31)
+          local sp = bit.band(editor:GetStyleAt(p-1), ide.STYLEMASK) -- previous position style
+          if mark == MD_MARK_HEAD and not iscomment[sp] then
+            p = p + 1
+            smark = smark - 1
+          end
+          -- StartStyling deprecated the second parameter, but since a version check
+          -- is not available for Scintilla, we check for INDIC0_MASK, which was
+          -- removed in the same wxwidgets commit
+          editor:StartStyling(p, wxstc.wxSTC_INDIC0_MASK and ide.STYLEMASK or 0)
           editor:SetStyling(smark, markup[MD_MARK_MARK].st)
           editor:SetStyling(t-f+1-smark-emark, markup[mark].st or markup[MD_MARK_MARK].st)
           editor:SetStyling(emark, markup[MD_MARK_MARK].st)
@@ -197,14 +217,18 @@ function MarkupStyle(editor, lines, linee)
     -- has this line changed its wrapping because of invisible styling?
     if wrapped > 1 and editor:WrapCount(line) < wrapped then needfix = true end
   end
-  editor:StartStyling(es, 31)
+  editor:StartStyling(es, wxstc.wxSTC_INDIC0_MASK and ide.STYLEMASK or 0)
 
   -- if any wrapped lines have changed, then reset WrapMode to fix the drawing
   if needfix then
     -- this fixes an issue with duplicate lines in Scintilla when
     -- invisible styles hide some of the content that would be wrapped.
     local wrapmode = editor:GetWrapMode()
-    if wrapmode ~= wxstc.wxSTC_WRAP_NONE then editor:SetWrapMode(wrapmode) end
+    if wrapmode ~= wxstc.wxSTC_WRAP_NONE then
+      -- change the wrap mode to force recalculation
+      editor:SetWrapMode(wxstc.wxSTC_WRAP_NONE)
+      editor:SetWrapMode(wrapmode)
+    end
     -- if some of the lines have folded, this can make not styled lines visible
     MarkupStyle(editor, linee+1) -- style to the end in this case
   end

@@ -1,12 +1,42 @@
+-- Copyright 2011-16 Paul Kulchenko, ZeroBrane LLC
 -- authors: Lomtik Software (J. Winwood & John Labenski)
 -- Luxinia Dev (Eike Decker & Christoph Kubisch)
 ---------------------------------------------------------
+
 local ide = ide
+local layoutlabel = {
+  UIMANAGER = "uimgrlayout",
+  NOTEBOOK = "nblayout",
+  NOTEBOOKOUTPUT = "nbbtmlayout",
+  NOTEBOOKPROJECT = "nbprojlayout",
+  DOCKNOTEBOOK = "nbdocklayout",
+  DOCKNOTEBOOKOUTPUT = "nbbtmdocklayout",
+  DOCKNOTEBOOKPROJECT = "nbprojdocklayout",
+  STATUSBAR = "statusbar",
+}
 
 -- ----------------------------------------------------------------------------
 -- Initialize the wxConfig for loading/saving the preferences
 
-local settings = wx.wxFileConfig(GetIDEString("settingsapp"),GetIDEString("settingsvendor"))
+local ini = ide.config.ini
+-- if ini path is relative and includes a directory name, make it relative to the IDE location
+ini = ini and (not wx.wxIsAbsolutePath(ini) and wx.wxFileName(ini):GetDirCount() > 0
+  and MergeFullPath(GetPathWithSep(ide.editorFilename), ini) or ini)
+-- check that the ini file doesn't point to a directory
+if ini and (wx.wxFileName(ini):IsDir() or wx.wxIsAbsolutePath(ini) and wx.wxDirExists(ini)) then
+  ide:Print(("Can't use 'ini' configuration setting '%s' that points to a directory instead of a file; ignored.")
+    :format(ini))
+  ini = nil
+end
+-- check that the directory is writable
+if ini and wx.wxIsAbsolutePath(ini) and not wx.wxFileName(ini):IsDirWritable() then
+  ide:Print(("Can't use 'ini' configuration setting '%s' that points to a non-writable directory; ignored.")
+    :format(ini))
+  ini = nil
+end
+
+local settings = wx.wxFileConfig(
+  ide:GetProperty("settingsapp"), ide:GetProperty("settingsvendor"), ini or "")
 ide.settings = settings
 
 local function settingsReadSafe(settings,what,default)
@@ -21,27 +51,38 @@ function SettingsRestoreFramePosition(window, windowName)
   local path = settings:GetPath()
   settings:SetPath("/"..windowName)
 
-  local s = -1
-  s = tonumber(select(2,settings:Read("s", -1)))
-  local x = tonumber(select(2,settings:Read("x", 0)))
-  local y = tonumber(select(2,settings:Read("y", 0)))
-  local w = tonumber(select(2,settings:Read("w", 1000)))
-  local h = tonumber(select(2,settings:Read("h", 700)))
+  local clientX, clientY, clientWidth, clientHeight = wx.wxClientDisplayRect()
+  local s = tonumber(select(2,settings:Read("s", -1)))
+  local w = tonumber(select(2,settings:Read("w", math.floor(clientWidth*0.8))))
+  local h = tonumber(select(2,settings:Read("h", math.floor(clientHeight*0.8))))
+  local x = tonumber(select(2,settings:Read("x", clientX+math.floor(clientWidth-w)/2)))
+  local y = tonumber(select(2,settings:Read("y", clientY+math.floor(clientHeight-h)/2)))
 
-  if (s ~= -1) and (s ~= 1) and (s ~= 2) then
-    local clientX, clientY, clientWidth, clientHeight
-    clientX, clientY, clientWidth, clientHeight = wx.wxClientDisplayRect()
+  if (s ~= -1) then
+    local clientX, clientY, clientWidth, clientHeight = wx.wxClientDisplayRect()
 
+    -- if left-top corner outside of the left-top side, reset it to the screen side
     if x < clientX then x = clientX end
     if y < clientY then y = clientY end
 
+    -- if the window is too wide for the screen, reset it to the screen size
     if w > clientWidth then w = clientWidth end
     if h > clientHeight then h = clientHeight end
 
+    -- if the right-bottom corner is still outside and there is only one display,
+    -- then reposition left-top corner, keeping the window centered
+    if wx.wxDisplay():GetCount() == 1 then
+      local outx = (x + w) - (clientX + clientWidth)
+      local outy = (y + h) - (clientY + clientHeight)
+      if outx > 0 then x = math.floor(0.5+(x - outx)/2) end
+      if outy > 0 then y = math.floor(0.5+(y - outy)/2) end
+    end
+
     window:SetSize(x, y, w, h)
-  elseif s == 1 then
-    window:Maximize(true)
   end
+
+  -- maximize after setting window position to make sure it's maximized on the correct monitor
+  if s == 1 then window:Maximize(true) end
 
   settings:SetPath(path)
 end
@@ -61,13 +102,10 @@ function SettingsSaveFramePosition(window, windowName)
   end
 
   settings:Write("s", s==2 and 0 or s) -- iconized maybe - but that shouldnt be saved
-
-  if s == 0 then
-    settings:Write("x", x)
-    settings:Write("y", y)
-    settings:Write("w", w)
-    settings:Write("h", h)
-  end
+  settings:Write("x", x)
+  settings:Write("y", y)
+  settings:Write("w", w)
+  settings:Write("h", h)
 
   settings:SetPath(path)
 end
@@ -231,7 +269,11 @@ function SettingsRestorePackage(package)
     if couldread then
       local ok, res = LoadSafe("return "..value)
       if ok then outtab[key] = res
-      else outtab[key] = nil end
+      else
+        outtab[key] = nil
+        ide:Print(("Couldn't load and ignored '%s' settings for package '%s': %s")
+          :format(key, package, res))
+      end
     end
     ismore, key, index = settings:GetNextEntry(index)
   end
@@ -239,16 +281,13 @@ function SettingsRestorePackage(package)
   return outtab
 end
 
-function SettingsSavePackage(package, values)
+function SettingsSavePackage(package, values, opts)
   local packagename = "/package/"..package
   local path = settings:GetPath()
-  local mdb = require('mobdebug')
 
   settings:DeleteGroup(packagename)
   settings:SetPath(packagename)
-  for k,v in pairs(values or {}) do
-    settings:Write(k, mdb.line(v, {comment = false, nocode = true}))
-  end
+  for k,v in pairs(values or {}) do settings:Write(k, DumpPlain(v, opts)) end
   settings:SetPath(path)
 end
 
@@ -269,8 +308,9 @@ local function saveNotebook(nb)
   local str = "nblayout|"
   
   for i=1,cnt do
-    local id = nb:GetPageText(i-1)
     local pg = nb:GetPage(i-1)
+    local doc = ide:GetDocument(pg)
+    local id = doc and doc:GetTabText() or nb:GetPageText(i-1)
     local x,y = pg:GetPosition():GetXY()
     addTo(pagesX,x,id)
     addTo(pagesY,y,id)
@@ -278,7 +318,7 @@ local function saveNotebook(nb)
   
   local function sortedPages(tab)
     local t = {}
-    for i,v in pairs(tab) do
+    for i in pairs(tab) do
       table.insert(t,i)
     end
     table.sort(t)
@@ -306,9 +346,9 @@ local function saveNotebook(nb)
     split = "<Y>"
   end
   
-  for i,v in ipairs(sortedUse) do
+  for _, v in ipairs(sortedUse) do
     local pages = pagesUse[v]
-    for n,id in ipairs(pages) do
+    for _, id in ipairs(pages) do
       str = str..id.."|"
     end
     str = str..split.."|"
@@ -326,10 +366,12 @@ local function loadNotebook(nb,str,fnIdConvert)
   -- store old pages
   local currentpages, order = {}, {}
   for i=1,cnt do
-    local id = nb:GetPageText(i-1)
+    local pg = nb:GetPage(i-1)
+    local doc = ide:GetDocument(pg)
+    local id = doc and doc:GetTabText() or nb:GetPageText(i-1)
     local newid = fnIdConvert and fnIdConvert(id) or id
     currentpages[newid] = currentpages[newid] or {}
-    table.insert(currentpages[newid], {page = nb:GetPage(i-1), text = id, index = i-1})
+    table.insert(currentpages[newid], {page = pg, text = id, index = i-1})
     order[i] = newid
   end
 
@@ -383,54 +425,99 @@ function SettingsRestoreView()
   local path = settings:GetPath()
   settings:SetPath(listname)
 
-  local frame = ide.frame
-  local uimgr = frame.uimgr
+  local frame = ide:GetMainFrame()
+  local uimgr = ide:GetUIManager()
   
   local layoutcur = uimgr:SavePerspective()
-  local layout = settingsReadSafe(settings,"uimgrlayout",layoutcur)
+  local layout = settingsReadSafe(settings,layoutlabel.UIMANAGER,"")
   if (layout ~= layoutcur) then
-    uimgr:LoadPerspective(layout, false)
+    -- save the current toolbar besth and re-apply after perspective is loaded
+    -- bestw and besth have two separate issues:
+    -- (1) layout includes bestw that is only as wide as the toolbar size,
+    -- this leaves default background on the right side of the toolbar;
+    -- fix it by explicitly replacing with the screen width.
+    -- (2) besth may be wrong after icon size changes.
+    local toolbar = uimgr:GetPane("toolbar")
+    local besth = toolbar:IsOk() and tonumber(uimgr:SavePaneInfo(toolbar):match("besth=([^;]+)"))
+
+    -- reload the perspective if the saved one is not empty as it's different from the default
+    if #layout > 0 then uimgr:LoadPerspective(layout, true) end
+
+    local screenw = frame:GetClientSize():GetWidth()
+    if toolbar:IsOk() then toolbar:BestSize(screenw, besth or -1) end
 
     -- check if debugging panes are not mentioned and float them
-    local panes = frame.uimgr:GetAllPanes()
     for _, name in pairs({"stackpanel", "watchpanel"}) do
-      local pane = frame.uimgr:GetPane(name)
+      local pane = uimgr:GetPane(name)
       if pane:IsOk() and not layout:find(name) then pane:Float() end
     end
-    -- unfortunately need to explicitly (re-)assign the caption,
-    -- as it's going to be restored from the config regardless of how
-    -- it is set now (which affects its translation)
-    uimgr:GetPane("projpanel"):Caption(TR("Project"))
+
+    -- check if the toolbar is not mentioned in the layout and show it
+    for _, name in pairs({"toolbar"}) do
+      local pane = uimgr:GetPane(name)
+      if pane:IsOk() and not layout:find(name) then pane:Show() end
+    end
+
+    -- remove captions from all panes
+    local panes = uimgr:GetAllPanes()
+    for index = 0, panes:GetCount()-1 do
+      uimgr:GetPane(panes:Item(index).name):CaptionVisible(false)
+    end
   end
+
+  frame:GetStatusBar():Show(settingsReadSafe(settings,layoutlabel.STATUSBAR,true))
+
   uimgr:Update()
   
-  local layoutcur = saveNotebook(frame.bottomnotebook)
-  local layout = settingsReadSafe(settings,"nbbtmlayout",layoutcur)
+  layoutcur = saveNotebook(ide:GetOutputNotebook())
+  layout = settingsReadSafe(settings,layoutlabel.NOTEBOOKOUTPUT,layoutcur)
   if (layout ~= layoutcur) then
-    loadNotebook(ide.frame.bottomnotebook,layout,
+    loadNotebook(ide:GetOutputNotebook(),layout,
       -- treat "Output (running)" same as "Output"
-      function(name) return
-        name:match(TR("Output")) or name:match("Output") or name end)
+      function(name) return name:match(TR("Output")) or name:match("Output") or name end)
+  end
+
+  layoutcur = saveNotebook(ide:GetProjectNotebook())
+  layout = settingsReadSafe(settings,layoutlabel.NOTEBOOKPROJECT,layoutcur)
+  if (layout ~= layoutcur) then
+    loadNotebook(ide:GetProjectNotebook(),layout)
   end
 
   -- always select Output tab
-  local bottomnotebook = frame.bottomnotebook
+  local bottomnotebook = ide:GetOutputNotebook()
   local index = bottomnotebook:GetPageIndex(bottomnotebook.errorlog)
   if index >= 0 then bottomnotebook:SetSelection(index) end
 
-  local layoutcur = saveNotebook(frame.notebook)
-  local layout = settingsReadSafe(settings,"nblayout",layoutcur)
+  layoutcur = saveNotebook(frame.notebook)
+  layout = settingsReadSafe(settings,layoutlabel.NOTEBOOK,layoutcur)
   if (layout ~= layoutcur) then
     loadNotebook(ide.frame.notebook,layout)
-    local openDocuments = ide.openDocuments
     local nb = frame.notebook
     local cnt = nb:GetPageCount()
     for i=0,cnt-1 do
-      openDocuments[nb:GetPage(i):GetId()].index = i
+      ide:GetDocument(nb:GetPage(i)):SetTabText(nb:GetPageText(i))
     end
   end
 
-  local editor = GetEditor()
+  -- restore configuration for notebook pages that have been split;
+  -- load saved dock_size values and update current values with saved ones
+  -- where dock_size configuration matches
+  for l, m in pairs({
+    [layoutlabel.DOCKNOTEBOOK] = ide:GetEditorNotebook():GetAuiManager(),
+    [layoutlabel.DOCKNOTEBOOKOUTPUT] = ide:GetOutputNotebook():GetAuiManager(),
+    [layoutlabel.DOCKNOTEBOOKPROJECT] = ide:GetProjectNotebook():GetAuiManager(),
+  }) do
+    -- ...|dock_size(5,0,0)=20|dock_size(2,1,0)=200|...
+    local prevlayout = settingsReadSafe(settings, l, "")
+    local curlayout = m:SavePerspective()
+    local newlayout = curlayout:gsub('(dock_size[^=]+=)(%d+)', function(t,v)
+        local val = prevlayout:match(EscapeMagic(t)..'(%d+)')
+        return t..(val or v)
+      end)
+    if newlayout ~= curlayout then m:LoadPerspective(newlayout) end
+  end
+
+  local editor = ide:GetEditor()
   if editor then editor:SetFocus() end
 
   settings:SetPath(path)
@@ -445,9 +532,14 @@ function SettingsSaveView()
   local frame = ide.frame
   local uimgr = frame.uimgr
   
-  settings:Write("uimgrlayout",uimgr:SavePerspective())
-  settings:Write("nblayout",   saveNotebook(frame.notebook))
-  settings:Write("nbbtmlayout",saveNotebook(frame.bottomnotebook))
+  settings:Write(layoutlabel.UIMANAGER, uimgr:SavePerspective())
+  settings:Write(layoutlabel.NOTEBOOK, saveNotebook(ide:GetEditorNotebook()))
+  settings:Write(layoutlabel.NOTEBOOKOUTPUT, saveNotebook(ide:GetOutputNotebook()))
+  settings:Write(layoutlabel.NOTEBOOKPROJECT, saveNotebook(ide:GetProjectNotebook()))
+  settings:Write(layoutlabel.DOCKNOTEBOOK, ide:GetEditorNotebook():GetAuiManager():SavePerspective())
+  settings:Write(layoutlabel.DOCKNOTEBOOKOUTPUT, ide:GetOutputNotebook():GetAuiManager():SavePerspective())
+  settings:Write(layoutlabel.DOCKNOTEBOOKPROJECT, ide:GetProjectNotebook():GetAuiManager():SavePerspective())
+  settings:Write(layoutlabel.STATUSBAR, frame:GetStatusBar():IsShown())
 
   settings:SetPath(path)
 end
@@ -457,8 +549,11 @@ function SettingsRestoreEditorSettings()
   local path = settings:GetPath()
   settings:SetPath(listname)
 
-  ide.config.interpreter = settingsReadSafe(settings,"interpreter",ide.config.interpreter)
-  ProjectSetInterpreter(ide.config.interpreter)
+  local interpreter = settingsReadSafe(settings, "interpreter",
+    ide.config.interpreter or ide.config.default.interpreter)
+  ProjectSetInterpreter(interpreter)
+
+  settings:SetPath(path)
 end
 
 function SettingsSaveEditorSettings()
@@ -467,16 +562,16 @@ function SettingsSaveEditorSettings()
   settings:DeleteGroup(listname)
   settings:SetPath(listname)
 
-  settings:Write("interpreter", ide.interpreter and ide.interpreter.fname or "_undefined_")
+  settings:Write("interpreter", ide.interpreter and ide.interpreter.fname or ide.config.default.interpreter)
 
   settings:SetPath(path)
 end
 
 function SettingsSaveAll()
-  SettingsSaveProjectSession(FileTreeGetProjects())
   SettingsSaveFileSession(GetOpenFiles())
-  SettingsSaveView()
-  SettingsSaveFileHistory(GetFileHistory())
-  SettingsSaveFramePosition(ide.frame, "MainFrame")
   SettingsSaveEditorSettings()
+  SettingsSaveProjectSession(FileTreeGetProjects())
+  SettingsSaveFileHistory(GetFileHistory())
+  SettingsSaveView()
+  SettingsSaveFramePosition(ide.frame, "MainFrame")
 end

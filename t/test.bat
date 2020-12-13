@@ -1,2 +1,1 @@
-@echo off
-zbstudio -cfg t/test.lua
+@start "" zbstudio -cfg t/test.lua -cfg "ini='t/test.ini'"

@@ -1,25 +1,29 @@
--- Copyright 2011-12 Paul Kulchenko, ZeroBrane LLC
+-- Copyright 2011-16 Paul Kulchenko, ZeroBrane LLC
 
-local love2d
+local pathcache
 local win = ide.osname == "Windows"
 local mac = ide.osname == "Macintosh"
 
 return {
-  name = "Love2d",
-  description = "Love2d game engine",
+  name = "LÖVE",
+  description = "LÖVE game engine",
   api = {"baselib", "love2d"},
   frun = function(self,wfilename,rundebug)
-    love2d = love2d or ide.config.path.love2d -- check if the path is configured
+    local projdir = self:fworkdir(wfilename)
+    local love2d = ide.config.path.love2d or pathcache and pathcache[projdir]
+    if love2d and not wx.wxFileExists(love2d) then
+      ide:Print(("Can't find configured love2d executable: '%s'."):format(love2d))
+      love2d = nil
+    end
     if not love2d then
       local sep = win and ';' or ':'
       local default =
-           win and ([[C:\Program Files\love]]..sep..[[D:\Program Files\love]]..sep..
-                    [[C:\Program Files (x86)\love]]..sep..[[D:\Program Files (x86)\love]]..sep)
+           win and (GenerateProgramFilesPath('love', sep)..sep)
         or mac and ('/Applications/love.app/Contents/MacOS'..sep)
         or ''
       local path = default
                  ..(os.getenv('PATH') or '')..sep
-                 ..(GetPathWithSep(self:fworkdir(wfilename)))..sep
+                 ..(GetPathWithSep(projdir))..sep
                  ..(os.getenv('HOME') and GetPathWithSep(os.getenv('HOME'))..'bin' or '')
       local paths = {}
       for p in path:gmatch("[^"..sep.."]+") do
@@ -27,34 +31,50 @@ return {
         table.insert(paths, p)
       end
       if not love2d then
-        DisplayOutput("Can't find love2d executable in any of the following folders: "
-          ..table.concat(paths, ", ").."\n")
+        ide:Print("Can't find love2d executable in any of the following folders: "
+          ..table.concat(paths, ", "))
+        return
+      end
+      pathcache = pathcache or {}
+      pathcache[projdir] = love2d
+    end
+
+    local main = 'main.lua'
+    if not GetFullPathIfExists(projdir, main) then
+      local altpath = wfilename:GetPath(wx.wxPATH_GET_VOLUME)
+      local altname = GetFullPathIfExists(altpath, main)
+      if altname and wx.wxMessageBox(
+          ("Can't find '%s' file in the current project folder.\n"
+           .."Would you like to switch the project directory to '%s'?"):format(main, altpath),
+          "LÖVE interpreter",
+          wx.wxYES_NO + wx.wxCENTRE, ide:GetMainFrame()) == wx.wxYES then
+        ide:SetProject(altpath)
+        ide:ActivateFile(altname) -- make sure that main.lua is also opened
+        projdir = altpath
+      else
+        ide:Print(("Can't find '%s' file in the current project folder: '%s'.")
+          :format(main, projdir))
         return
       end
     end
 
-    if not GetFullPathIfExists(self:fworkdir(wfilename), 'main.lua') then
-      DisplayOutput("Can't find 'main.lua' file in the current project folder.\n")
-      return
-    end
-
     if rundebug then
-      DebuggerAttachDefault({runstart = ide.config.debugger.runonstart == true})
+      ide:GetDebugger():SetOptions({runstart = ide.config.debugger.runonstart ~= false})
     end
 
-    local cmd = ('"%s" "%s"%s'):format(love2d,
-      self:fworkdir(wfilename), rundebug and ' -debug' or '')
+    -- suppress hiding ConsoleWindowClass as this is used by Love console
+    local uhw = ide.config.unhidewindow
+    local cwc = uhw and uhw.ConsoleWindowClass
+    if uhw then uhw.ConsoleWindowClass = 0 end
+
+    local params = self:GetCommandLineArg()
+    local cmd = ('"%s" "%s"%s%s'):format(love2d, projdir,
+      params and " "..params or "", rundebug and ' -debug' or '')
     -- CommandLineRun(cmd,wdir,tooutput,nohide,stringcallback,uid,endcallback)
-    return CommandLineRun(cmd,self:fworkdir(wfilename),true,false,nil,nil,
-      function() ide.debugger.pid = nil end)
-  end,
-  fprojdir = function(self,wfilename)
-    return wfilename:GetPath(wx.wxPATH_GET_VOLUME)
-  end,
-  fworkdir = function(self,wfilename)
-    return ide.config.path.projectdir or wfilename:GetPath(wx.wxPATH_GET_VOLUME)
+    return CommandLineRun(cmd,projdir,true,true,nil,nil,
+      function() if uhw then uhw.ConsoleWindowClass = cwc end end)
   end,
   hasdebugger = true,
-  fattachdebug = function(self) DebuggerAttachDefault() end,
   scratchextloop = true,
+  takeparameters = true,
 }

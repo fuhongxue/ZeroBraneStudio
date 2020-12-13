@@ -1,6 +1,6 @@
 -- Copyright 2011-12 Paul Kulchenko, ZeroBrane LLC
 
-local gslshell
+local pathcache
 local win = ide.osname == "Windows"
 
 return {
@@ -8,13 +8,10 @@ return {
   description = "GSL-shell interpreter",
   api = {"baselib"},
   frun = function(self,wfilename,rundebug)
-    gslshell = gslshell or ide.config.path.gslshell -- check if the path is configured
+    local gslshell = ide.config.path.gslshell or pathcache -- check if the path is configured
     if not gslshell then
       local sep = win and ';' or ':'
-      local default =
-           win and ([[C:\Program Files\gsl-shell]]..sep..[[D:\Program Files\gsl-shell]]..sep..
-                    [[C:\Program Files (x86)\gsl-shell]]..sep..[[D:\Program Files (x86)\gsl-shell]]..sep)
-        or ''
+      local default = win and GenerateProgramFilesPath('gsl-shell', sep)..sep or ''
       local path = default
                  ..(os.getenv('PATH') or '')..sep
                  ..(GetPathWithSep(self:fworkdir(wfilename)))..sep
@@ -25,10 +22,11 @@ return {
         table.insert(paths, p)
       end
       if not gslshell then
-        DisplayOutput("Can't find gsl-shell executable in any of the following folders: "
-          ..table.concat(paths, ", ").."\n")
+        ide:Print("Can't find gsl-shell executable in any of the following folders: "
+          ..table.concat(paths, ", "))
         return
       end
+      pathcache = gslshell
     end
 
     do
@@ -51,28 +49,42 @@ return {
       end
     end
 
+    local filepath = wfilename:GetFullPath()
     if rundebug then
-      DebuggerAttachDefault({runstart = ide.config.debugger.runonstart == true})
-    end
+      ide:GetDebugger():SetOptions({runstart = ide.config.debugger.runonstart == true})
 
-    local code = rundebug
-      and ([[-e "io.stdout:setvbuf('no'); %s"]]):format(rundebug)
-       or ([[-e "io.stdout:setvbuf('no')" "%s"]]):format(wfilename:GetFullPath())
-    local cmd = '"'..gslshell..'" '..code
+      local tmpfile = wx.wxFileName()
+      tmpfile:AssignTempFileName(".")
+      filepath = tmpfile:GetFullPath()
+      local f = io.open(filepath, "w")
+      if not f then
+        ide:Print("Can't open temporary file '"..filepath.."' for writing.")
+        return
+      end
+      f:write(rundebug)
+      f:close()
+    else
+      -- if running on Windows and can't open the file, this may mean that
+      -- the file path includes unicode characters that need special handling
+      local fh = io.open(filepath, "r")
+      if fh then fh:close() end
+      if ide.osname == 'Windows' and pcall(require, "winapi")
+      and wfilename:FileExists() and not fh then
+        winapi.set_encoding(winapi.CP_UTF8)
+        filepath = winapi.short_path(filepath)
+      end
+    end
+    local params = self:GetCommandLineArg()
+    local code = ([[-e "io.stdout:setvbuf('no')" "%s"]]):format(filepath)
+    local cmd = '"'..gslshell..'" '..code..(params and " "..params or "")
 
     -- CommandLineRun(cmd,wdir,tooutput,nohide,stringcallback,uid,endcallback)
     return CommandLineRun(cmd,self:fworkdir(wfilename),true,false,nil,nil,
-      function() ide.debugger.pid = nil end)
-  end,
-  fprojdir = function(self,wfilename)
-    return wfilename:GetPath(wx.wxPATH_GET_VOLUME)
-  end,
-  fworkdir = function(self,wfilename)
-    return ide.config.path.projectdir or wfilename:GetPath(wx.wxPATH_GET_VOLUME)
+      function() if rundebug then wx.wxRemoveFile(filepath) end end)
   end,
   hasdebugger = true,
-  fattachdebug = function(self) DebuggerAttachDefault() end,
   skipcompile = true,
   unhideanywindow = true,
   scratchextloop = false,
+  takeparameters = true,
 }

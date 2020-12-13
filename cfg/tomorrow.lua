@@ -1,10 +1,10 @@
 -- This is a file that sets color scheme based on Tomorrow format.
--- Copyright 2011-12 Paul Kulchenko, ZeroBrane LLC
+-- Copyright 2011-14 Paul Kulchenko, ZeroBrane LLC
 
 -- Tomorrow colors from https://github.com/chriskempson/tomorrow-theme
 -- Zenburn colors from https://github.com/jnurmine/Zenburn/blob/master/colors/zenburn.vim (contributed by Srdjan Marković)
 -- Monokai colors from http://www.monokai.nl/blog/2006/07/15/textmate-color-theme/
--- Molokay colors based on https://github.com/tomasr/molokai/blob/master/colors/molokai.vim
+-- Molokai colors based on https://github.com/tomasr/molokai/blob/master/colors/molokai.vim
 -- Solarized colors from https://github.com/altercation/vim-colors-solarized
 
 local theme = ...
@@ -39,18 +39,18 @@ local colors = {
     Purple      = H'8959a8',
   },
   TomorrowContrast = { -- contributed by Sergey Lerg
-    Background  = H'f7f7f7',
-    CurrentLine = H'efefef',
-    Selection   = H'd6d6d6',
-    Foreground  = H'202020',
-    Comment     = H'8e908c',
+    Background  = H'f7f7f7', --background of pane
+    CurrentLine = H'efefef', --background of current line
+    Selection   = H'd6d6d6', --background of selection
+    Foreground  = H'202020', --foreground text color
+    Comment     = H'8e908c', --foreground of comments, line numbers, helper lines (collapsing + whitespace)
     Red         = H'4669ff', --numbers
     Orange      = H'f5871f',
     Yellow      = H'eab700',
     Green       = H'108010', --strings
-    Aqua        = H'4060b0', --built in functions
+    Aqua        = H'4060b0', --operators, and round/square/curly braces
     Blue        = H'101080', --keywords
-    Purple      = H'a01090',
+    Purple      = H'a01090', --built in functions
   },
   TomorrowNight = {
     Background  = H'1d1f21',
@@ -181,16 +181,16 @@ local colors = {
   NotepadPlusPlus = { -- contributed by Florian (https://github.com/SiENcE)
     Background  = H'FFFFFF',
     CurrentLine = H'E9E2FF',
-    Selection   = H'ADADA1',
+    Selection   = H'C0C0C0',
     Foreground  = H'000000',
     Comment     = H'008000',
     Red         = H'FF6900',
-    Orange      = H'00FF00',
+    Orange      = H'FF0000',
     Yellow      = H'FF4E00',
     Green       = H'808080',
-    Aqua        = H'260099',
+    Aqua        = H'000080',
     Blue        = H'2123FF',
-    Purple      = H'FFFFFF',
+    Purple      = H'8000FF',
   },
   SciTeLuaIDE = { -- contributed by Jayanth Acharya
     Background  = H'1B1D1E',
@@ -199,8 +199,8 @@ local colors = {
     Foreground  = H'F8F8F2',    -- super-light-gray (everything else)
     Comment     = H'00FF00',    -- bright green (comments)
     Red         = H'F92672',    -- purple (numbers)
-    Orange      = H'AE81FF',    -- lavendar?? (numbers)
-    Yellow      = H'F8F8F2',    -- light-gray
+    Orange      = H'AE81FF',    -- lavender (brace match)
+    Yellow      = H'F8F8F2',    -- light-gray (ctrl-char)
     Green       = H'FF8000',    -- amber (string literal)
     Aqua        = H'808080',    -- gray (operators, separators etc.)
     Blue        = H'0066FF',    -- semi-blue (keywords)
@@ -257,19 +257,18 @@ return {
   bracemiss = {fg = C.Red, b = true},
   ctrlchar = {fg = C.Yellow},
   indent = {fg = C.Comment},
-  calltip = nil,
+  calltip = {fg = C.Foreground, bg = C.Background},
 
   -- common special (need custom fg & bg)
-  calltipbg = nil,
   sel = {bg = C.Selection},
   caret = {fg = C.Foreground},
   caretlinebg = {bg = C.CurrentLine},
   fold = {fg = C.Comment, bg = C.Background, sel = mixer(C.Comment, 1, 96)},
-  whitespace = {fg = C.Comment, bg = C.Background},
+  whitespace = {fg = C.Comment},
   edge = {},
 
   indicator = {
-    fncall = {fg = C.Purple, st = wxstc.wxSTC_INDIC_ROUNDBOX},
+    fncall = {fg = C.Purple, st = wxstc.wxSTC_INDIC_HIDDEN},
     --[[ other possible values are:
       wxSTC_INDIC_PLAIN	 Single-line underline
       wxSTC_INDIC_SQUIGGLE Squiggly underline
@@ -287,7 +286,7 @@ return {
   },
 
   -- markup
-  ['['] = {hs = mixer(C.Comment, 3, 64)},
+  ['['] = {hs = mixer(mixer(C.Comment, 1, 64), 3, 128)},
   ['|'] = {fg = mixer(mixer(C.Comment, 1, 64), 3, 64)},
 
   -- markers

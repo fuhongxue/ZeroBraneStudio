@@ -1,6 +1,6 @@
 -- Copyright 2011-13 Paul Kulchenko, ZeroBrane LLC
 
-local moai
+local pathcache
 local win = ide.osname == "Windows"
 
 return {
@@ -8,13 +8,10 @@ return {
   description = "Moai mobile platform",
   api = {"baselib", "moai"},
   frun = function(self,wfilename,rundebug)
-    moai = moai or ide.config.path.moai -- check if the path is configured
+    local moai = ide.config.path.moai or pathcache -- check if the path is configured
     if not moai then
       local sep = win and ';' or ':'
-      local default =
-           win and ([[C:\Program Files\moai]]..sep..[[D:\Program Files\moai]]..sep..
-                    [[C:\Program Files (x86)\moai]]..sep..[[D:\Program Files (x86)\moai]]..sep)
-        or ''
+      local default = win and GenerateProgramFilesPath('moai', sep)..sep or ''
       local path = default
                  ..(os.getenv('PATH') or '')..sep
                  ..(os.getenv('MOAI_BIN') or '')..sep
@@ -25,10 +22,11 @@ return {
         table.insert(paths, p)
       end
       if not moai then
-        DisplayOutput("Can't find moai executable in any of the folders in PATH or MOAI_BIN: "
-          ..table.concat(paths, ", ").."\n")
+        ide:Print("Can't find moai executable in any of the folders in PATH or MOAI_BIN: "
+          ..table.concat(paths, ", "))
         return
       end
+      pathcache = moai
     end
 
     local file
@@ -40,15 +38,15 @@ return {
         if file then break end
       end
       if not file then
-        DisplayOutput("Can't find any of the specified entry points ("
+        ide:Print("Can't find any of the specified entry points ("
           ..table.concat(epoints, ", ")
-          ..") in the current project; continuing with the current file...\n")
+          ..") in the current project; continuing with the current file...")
       end
     end
 
     if rundebug then
       -- start running the application right away
-      DebuggerAttachDefault({startwith = file,
+      ide:GetDebugger():SetOptions({startwith = file,
         runstart = ide.config.debugger.runonstart ~= false})
       local code = (
 [[xpcall(function() 
@@ -61,7 +59,7 @@ return {
       file = tmpfile:GetFullPath()
       local f = io.open(file, "w")
       if not f then
-        DisplayOutput("Can't open temporary file '"..file.."' for writing\n")
+        ide:Print("Can't open temporary file '"..file.."' for writing.")
         return 
       end
       f:write(code)
@@ -87,15 +85,8 @@ return {
       or ('"%s" "%s"'):format(moai, file)
     -- CommandLineRun(cmd,wdir,tooutput,nohide,stringcallback,uid,endcallback)
     return CommandLineRun(cmd,self:fworkdir(wfilename),true,false,nil,nil,
-      function() ide.debugger.pid = nil if rundebug then wx.wxRemoveFile(file) end end)
-  end,
-  fprojdir = function(self,wfilename)
-    return wfilename:GetPath(wx.wxPATH_GET_VOLUME)
-  end,
-  fworkdir = function(self,wfilename)
-    return ide.config.path.projectdir or wfilename:GetPath(wx.wxPATH_GET_VOLUME)
+      function() if rundebug then wx.wxRemoveFile(file) end end)
   end,
   hasdebugger = true,
-  fattachdebug = function(self) DebuggerAttachDefault() end,
   scratchextloop = true,
 }
